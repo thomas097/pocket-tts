@@ -27,8 +27,7 @@ class PocketTTS:
         model_path: Path,
         voice_dir: str = "voices",
         precision: str = "int8",
-        temperature: float = 0.01,
-        lsd_steps: int = 1,
+        temperature: float = 0.01
     ):
         if precision not in self.VALID_PRECISIONS:
             raise ValueError(f"precision must be one of {self.VALID_PRECISIONS}, got '{precision}'")
@@ -37,7 +36,6 @@ class PocketTTS:
         self.voices_path = model_path / voice_dir
         self.precision = precision
         self.temperature = temperature
-        self.lsd_steps = lsd_steps
 
         self.sample_rate = int(self.metadata["sample_rate"])
         self.frame_rate = float(self.metadata["frame_rate"])
@@ -83,7 +81,6 @@ class PocketTTS:
             model_path / f"mimi_decoder{suffix}.onnx"
         )
         
-        self._precompute_flow_buffers()
         self._voice_cache: dict[str, np.ndarray] = {}
         self._voice_state_cache: dict[str, dict[str, np.ndarray]] = {}
 
@@ -119,19 +116,6 @@ class PocketTTS:
         if fp32.exists():
             return fp32.name
         raise FileNotFoundError(f"Missing ONNX file for {stem} in {model_path}")
-
-    def _precompute_flow_buffers(self):
-        dt = 1.0 / self.lsd_steps
-        self._st_buffers = []
-        for j in range(self.lsd_steps):
-            s = j / self.lsd_steps
-            t = s + dt
-            self._st_buffers.append(
-                (
-                    np.array([[s]], dtype=np.float32),
-                    np.array([[t]], dtype=np.float32),
-                )
-            )
 
     @staticmethod
     def _numpy_dtype(dtype: str):
@@ -275,7 +259,11 @@ class PocketTTS:
         voice_path = self.voices_path / f"{voice}.safetensors"
         if voice_path.exists() and voice_path.suffix == ".safetensors":
             model_state = self._import_model_state_file(voice_path)
-            return self._state_from_model_state(model_state, self.flow_state_manifest)
+            voice_state = self._state_from_model_state(model_state, self.flow_state_manifest)
+
+            self._voice_state_cache[voice] = voice_state
+
+            return voice_state
         else:
             raise ValueError(f"Voice '{voice}' not found.")
 
@@ -297,25 +285,6 @@ class PocketTTS:
         if self.pad_with_spaces_for_short_inputs and len(text.split()) < 5:
             text = " " * 8 + text
         return text, frames_after_eos_guess
-
-    def _tokenize(self, text: str) -> np.ndarray:
-        prepared, _ = self._prepare_text_prompt(text)
-        token_ids = self.tokenizer.tokenize(prepared)
-        return token_ids
-
-    @staticmethod
-    def _find_boundary_indices(tokens: list[int], boundary_tokens: set[int]) -> list[int]:
-        indices = [0]
-        previous_was_boundary = False
-        for index, token in enumerate(tokens):
-            if token in boundary_tokens:
-                previous_was_boundary = True
-            else:
-                if previous_was_boundary:
-                    indices.append(index)
-                previous_was_boundary = False
-        indices.append(len(tokens))
-        return indices
 
     def _estimate_max_gen_len(self, token_count: int) -> int:
         gen_len_sec = token_count / self.TOKENS_PER_SECOND_ESTIMATE + self.GEN_SECONDS_PADDING
@@ -346,7 +315,7 @@ class PocketTTS:
         curr = np.full((1, 1, self.latent_dim), np.nan, dtype=np.float32)
         eos_step = None
         frame_limit = max_frames or self._estimate_max_gen_len(text_ids.shape[1])
-        dt = 1.0 / self.lsd_steps
+        dt = 1.0
 
         for step in range(frame_limit):
             result = self.flow_lm_main.run(
@@ -369,83 +338,15 @@ class PocketTTS:
             else:
                 x = np.zeros((1, self.latent_dim), dtype=np.float32)
 
-            for s_arr, t_arr in self._st_buffers:
-                flow = self.flow_lm_flow.run(
-                    c=conditioning, 
-                    # s=s_arr, 
-                    # t=t_arr, 
-                    x=x
-                )[0]
-                x = x + flow * dt
+            flow = self.flow_lm_flow.run(
+                c=conditioning,  
+                x=x
+            )[0]
+            x = x + flow * dt
 
             latent = x.reshape(1, 1, self.latent_dim)
             yield latent
             curr = latent
-
-    def generate_latents(
-        self,
-        text: str,
-        voice: str,
-        max_frames: Optional[int] = None,
-        frames_after_eos: Optional[int] = None,
-    ) -> np.ndarray:
-        base_state = self.prepare_voice_state(voice)
-        latent_chunks = []
-
-        for chunk in [text]:
-            _, guess = self._prepare_text_prompt(chunk)
-            effective_frames = (
-                frames_after_eos
-                if frames_after_eos is not None
-                else (self.model_recommended_frames_after_eos or (guess + 2))
-            )
-            text_ids = self._tokenize(chunk)
-            latent_chunks.extend(
-                self._run_flow_lm_chunk(base_state, text_ids, max_frames, effective_frames)
-            )
-
-        if not latent_chunks:
-            return np.zeros((1, 0, self.latent_dim), dtype=np.float32)
-        return np.concatenate(latent_chunks, axis=1)
-
-    def decode_latents(self, latents: np.ndarray, chunk_size: int = 15) -> np.ndarray:
-        state = self._init_state(self.mimi_state_manifest)
-        audio_chunks = []
-
-        for index in range(0, latents.shape[1], chunk_size):
-            chunk = latents[:, index : index + chunk_size, :]
-            result = self.mimi_decoder.run(latent=chunk, **state)
-            audio_chunks.append(result[0].reshape(-1))
-            self._update_state_from_outputs(state, result, self.mimi_state_manifest, output_offset=1)
-
-        if not audio_chunks:
-            return np.zeros((0,), dtype=np.float32)
-        return np.concatenate(audio_chunks)
-
-    def _decode_worker(self, latent_queue: queue.Queue, audio_chunks: list, decode_chunk_size: int = 12):
-        mimi_state = self._init_state(self.mimi_state_manifest)
-        buffered = []
-        decoded = 0
-
-        while True:
-            item = latent_queue.get()
-            if item is None:
-                break
-            buffered.append(item)
-
-            if len(buffered) - decoded >= decode_chunk_size:
-                chunk = np.concatenate(buffered[decoded : decoded + decode_chunk_size], axis=1)
-                result = self.mimi_decoder.run(latent=chunk, **mimi_state)
-                audio_chunks.append(result[0].reshape(-1))
-                self._update_state_from_outputs(
-                    mimi_state, result, self.mimi_state_manifest, output_offset=1
-                )
-                decoded += decode_chunk_size
-
-        if decoded < len(buffered):
-            chunk = np.concatenate(buffered[decoded:], axis=1)
-            result = self.mimi_decoder.run(latent=chunk, **mimi_state)
-            audio_chunks.append(result[0].reshape(-1))
 
     def stream(
         self,
@@ -466,7 +367,9 @@ class PocketTTS:
                 if frames_after_eos is not None
                 else (self.model_recommended_frames_after_eos or (guess + 2))
             )
-            text_ids = self._tokenize(chunk_text)
+
+            prepared, _ = self._prepare_text_prompt(text)
+            token_ids = self.tokenizer.tokenize(prepared)
 
             mimi_state = self._init_state(self.mimi_state_manifest)
             generated_latents = []
@@ -474,7 +377,7 @@ class PocketTTS:
             playback_start_time = None
             start_time = time.time()
 
-            for latent in self._run_flow_lm_chunk(base_state, text_ids, max_frames, effective_frames):
+            for latent in self._run_flow_lm_chunk(base_state, token_ids, max_frames, effective_frames):
                 generated_latents.append(latent)
                 pending = len(generated_latents) - decoded_frames
                 chunk_size = 0
