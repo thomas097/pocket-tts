@@ -1,3 +1,4 @@
+import os
 import onnxruntime as ort
 import numpy.typing as npt
 from pathlib import Path
@@ -13,7 +14,7 @@ class OnnxSession:
 
     def _default_session_options(self) -> ort.SessionOptions:
         options = ort.SessionOptions()
-        options.intra_op_num_threads = 4
+        options.intra_op_num_threads = min(os.cpu_count() or 4, 4)
         options.inter_op_num_threads = 1
         options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
         options.graph_optimization_level = (

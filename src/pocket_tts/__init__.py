@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from pocket-tts!")
+from .model import PocketTTS
