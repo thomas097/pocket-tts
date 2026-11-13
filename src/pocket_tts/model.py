@@ -98,7 +98,7 @@ class PocketTTS:
         result: Sequence[np.ndarray],
         manifest: list[dict],
         output_offset: int,
-    ):
+    ) -> None:
         for entry in manifest:
             state[entry["input_name"]] = result[output_offset + entry["index"]]
     
@@ -116,10 +116,13 @@ class PocketTTS:
     def _derive_step(module_state: dict[str, np.ndarray]) -> np.ndarray:
         if "step" in module_state:
             return np.asarray(module_state["step"], dtype=np.int64).reshape(1)
+        
         if "offset" in module_state and "end_offset" not in module_state:
             return np.asarray(module_state["offset"], dtype=np.int64).reshape(1)
+        
         if "current_end" in module_state:
             return np.array([module_state["current_end"].shape[0]], dtype=np.int64)
+        
         return np.array([0], dtype=np.int64)
 
     def _adapt_state_tensor(self, source: np.ndarray, entry: dict) -> np.ndarray:
