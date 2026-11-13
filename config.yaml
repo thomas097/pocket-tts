@@ -1,0 +1,9 @@
+server:
+  host: "[::]"
+  port: 50051
+  max_workers: 10
+
+tts:
+  checkpoint_path: "checkpoints/pocket-tts-7m-refl"
+  default_voice: "giovanni"
+  sample_rate: 24000

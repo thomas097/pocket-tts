@@ -1,5 +1,5 @@
 import numpy as np
-import sounddevice
+import sounddevice as sd
 
 from pathlib import Path
 
@@ -15,15 +15,8 @@ texts = [
     "That is awesome, keep it up!"
 ]
 
-print("Generating...")
-for text in texts:
-    generator = tts.stream(text, voice='giovanni')
-
-    full_audio = np.concat(list(generator), axis=0)
-
-    sounddevice.play(
-        data=full_audio, 
-        samplerate=24_000, 
-        blocking=True
-        )
-    
+with sd.OutputStream(samplerate=24_000, channels=1, dtype='float32') as stream:
+    for text in texts:
+        print(f"Generating: \"{text}\"")
+        for chunk in tts.stream(text, voice='giovanni'):
+            stream.write(chunk)

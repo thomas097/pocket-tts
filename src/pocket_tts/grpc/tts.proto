@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package tts;
+
+service TTSService {
+  // Server-side streaming RPC: client sends text, server streams back audio chunks
+  rpc stream (TTSRequest) returns (stream AudioChunk);
+}
+
+message TTSRequest {
+  string text = 1;
+  string voice = 2;
+}
+
+message AudioChunk {
+  bytes audio_data = 1;
+  int32 sample_rate = 2;
+}
