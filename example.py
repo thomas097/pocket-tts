@@ -18,5 +18,5 @@ texts = [
 with sd.OutputStream(samplerate=24_000, channels=1, dtype='float32') as stream:
     for text in texts:
         print(f"Generating: \"{text}\"")
-        for chunk in tts.stream(text, voice='giovanni'):
+        for chunk in tts.stream(text, voice='jane'):
             stream.write(chunk)

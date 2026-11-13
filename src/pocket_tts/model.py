@@ -1,14 +1,13 @@
 import json
 import os
-import queue
 import time
 import wave
 from pathlib import Path
 from typing import Generator, Optional, Union, Sequence
 
 import numpy as np
+import safetensors
 import onnxruntime as ort
-from safetensors import safe_open
 
 import soundfile as sf
 import scipy.signal
@@ -27,41 +26,32 @@ class PocketTTS:
         model_path: Path,
         voice_dir: str = "voices",
         precision: str = "int8",
-        temperature: float = 0.01
-    ):
+        ) -> None:
         if precision not in self.VALID_PRECISIONS:
             raise ValueError(f"precision must be one of {self.VALID_PRECISIONS}, got '{precision}'")
 
-        self.metadata = self._load_metadata(model_path)
+        self._config = self._load_metadata_config(model_path)
         self.voices_path = model_path / voice_dir
         self.precision = precision
-        self.temperature = temperature
 
-        self.sample_rate = int(self.metadata["sample_rate"])
-        self.frame_rate = float(self.metadata["frame_rate"])
-        self.samples_per_frame = int(self.metadata["samples_per_frame"])
+        self.sample_rate = int(self._config["sample_rate"])
+        self.frame_rate = float(self._config["frame_rate"])
+        self.samples_per_frame = int(self._config["samples_per_frame"])
         self.frame_duration = self.samples_per_frame / self.sample_rate
-        self.latent_dim = int(self.metadata["latent_dim"])
-        self.conditioning_dim = int(self.metadata["conditioning_dim"])
-        self.pad_with_spaces_for_short_inputs = bool(
-            self.metadata.get("pad_with_spaces_for_short_inputs", False)
-        )
-        self.remove_semicolons = bool(self.metadata.get("remove_semicolons", False))
-        self.model_recommended_frames_after_eos = self.metadata.get(
-            "model_recommended_frames_after_eos"
-        )
-        self.max_token_per_chunk = int(self.metadata.get("max_token_per_chunk", 50))
-        self.insert_bos_before_voice = bool(self.metadata.get("insert_bos_before_voice", False))
+        self.latent_dim = int(self._config["latent_dim"])
+        self.conditioning_dim = int(self._config["conditioning_dim"])
+        
+        self.max_token_per_chunk = int(self._config.get("max_token_per_chunk", 50))
 
         self.tokenizer = Tokenizer(model_path / "tokenizer.model")
 
         self.bos_before_voice = None
-        bos_file = self.metadata.get("bos_before_voice_file")
+        bos_file = self._config.get("bos_before_voice_file")
         if bos_file:
             self.bos_before_voice = np.load(model_path / bos_file).astype(np.float32)
 
-        self.flow_state_manifest = self.metadata["flow_lm_state_manifest"]
-        self.mimi_state_manifest = self.metadata["mimi_state_manifest"]
+        self.flow_state_manifest = self._config["flow_lm_state_manifest"]
+        self.mimi_state_manifest = self._config["mimi_state_manifest"]
 
         # Load models from (optionally quantized) ONNX files
         suffix: str = f"_{precision}" if precision else ""
@@ -85,37 +75,11 @@ class PocketTTS:
         self._voice_state_cache: dict[str, dict[str, np.ndarray]] = {}
 
     @staticmethod
-    def _load_metadata(bundle_dir: Path) -> dict:
-        metadata_path = bundle_dir / "bundle.json"
+    def _load_metadata_config(bundle_dir: Path) -> dict:
+        metadata_path = bundle_dir / "config.json"
         if not metadata_path.exists():
             raise FileNotFoundError(f"Missing bundle metadata: {metadata_path}")
         return json.loads(metadata_path.read_text())
-
-    def _get_providers(self, device: str) -> list[str]:
-        if device == "cpu":
-            return ["CPUExecutionProvider"]
-        if device == "cuda":
-            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        available = ort.get_available_providers()
-        if "CUDAExecutionProvider" in available:
-            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        return ["CPUExecutionProvider"]
-
-    def _make_session_options(self) -> ort.SessionOptions:
-        opts = ort.SessionOptions()
-        opts.intra_op_num_threads = min(os.cpu_count() or 4, 4)
-        opts.inter_op_num_threads = 1
-        return opts
-
-    def _model_file(self, model_path: Path, stem: str) -> str:
-        if self.precision == "int8":
-            quantized = model_path / f"{stem}_int8.onnx"
-            if quantized.exists():
-                return quantized.name
-        fp32 = model_path / f"{stem}.onnx"
-        if fp32.exists():
-            return fp32.name
-        raise FileNotFoundError(f"Missing ONNX file for {stem} in {model_path}")
 
     @staticmethod
     def _numpy_dtype(dtype: str):
@@ -155,52 +119,11 @@ class PocketTTS:
     ):
         for entry in manifest:
             state[entry["input_name"]] = result[output_offset + entry["index"]]
-
-    def _load_audio(self, path: Union[str, Path]) -> np.ndarray:
-        path = Path(path)
-
-        if path.suffix.lower() == ".wav":
-            with wave.open(str(path), "rb") as wav_file:
-                sr = wav_file.getframerate()
-                raw_data = wav_file.readframes(-1)
-                audio = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / 32768.0
-        else:
-            audio, sr = sf.read(str(path))
-            if len(audio.shape) > 1:
-                audio = audio.mean(axis=1)
-            audio = audio.astype(np.float32)
-
-        if sr != self.sample_rate:
-            gcd = np.gcd(int(sr), int(self.sample_rate))
-            up = int(self.sample_rate // gcd)
-            down = int(sr // gcd)
-            audio = scipy.signal.resample_poly(audio, up, down, axis=-1).astype(np.float32)
-
-        return audio.reshape(1, 1, -1)
-
-    def encode_voice(self, audio_path: Union[str, Path]) -> np.ndarray:
-        audio = self._load_audio(audio_path)
-        embeddings: np.ndarray = self.mimi_encoder.run(None, {"audio": audio})[0] # type:ignore
-        while embeddings.ndim > 3:
-            embeddings = embeddings.squeeze(0)
-        if embeddings.ndim < 3:
-            embeddings = embeddings[None]
-        return embeddings.astype(np.float32, copy=False)
-
-    def _prepare_voice_embeddings(self, embeddings: np.ndarray) -> np.ndarray:
-        embeddings = np.asarray(embeddings, dtype=np.float32)
-        while embeddings.ndim > 3:
-            embeddings = embeddings.squeeze(0)
-        if embeddings.ndim < 3:
-            embeddings = embeddings.reshape(1, -1, embeddings.shape[-1])
-        if self.insert_bos_before_voice and self.bos_before_voice is not None:
-            embeddings = np.concatenate([self.bos_before_voice, embeddings], axis=1)
-        return embeddings
     
     @staticmethod
     def _import_model_state_file(source: Union[str, Path]) -> dict[str, dict[str, np.ndarray]]:
         result: dict[str, dict[str, np.ndarray]] = {}
-        with safe_open(str(source), framework="np") as handle:
+        with safetensors.safe_open(str(source), framework="np") as handle: #type:ignore
             for key in handle.keys():
                 module_name, tensor_key = key.split("/", 1)
                 result.setdefault(module_name, {})
@@ -272,8 +195,6 @@ class PocketTTS:
         if not text:
             raise ValueError("Text cannot be empty")
         text = text.replace("\n", " ").replace("\r", " ").replace("  ", " ")
-        if self.remove_semicolons:
-            text = text.replace(";", ",")
 
         number_of_words = len(text.split())
         frames_after_eos_guess = 3 if number_of_words <= 4 else 1
@@ -282,8 +203,6 @@ class PocketTTS:
             text = text[0].upper() + text[1:]
         if text[-1].isalnum():
             text = text + "."
-        if self.pad_with_spaces_for_short_inputs and len(text.split()) < 5:
-            text = " " * 8 + text
         return text, frames_after_eos_guess
 
     def _estimate_max_gen_len(self, token_count: int) -> int:
@@ -332,11 +251,7 @@ class PocketTTS:
             if eos_step is not None and step >= eos_step + frames_after_eos:
                 break
 
-            if self.temperature > 0:
-                std = np.sqrt(self.temperature)
-                x = np.random.normal(0.0, std, (1, self.latent_dim)).astype(np.float32)
-            else:
-                x = np.zeros((1, self.latent_dim), dtype=np.float32)
+            x = np.zeros((1, self.latent_dim), dtype=np.float32)
 
             flow = self.flow_lm_flow.run(
                 c=conditioning,  
@@ -363,9 +278,7 @@ class PocketTTS:
         for chunk_text in [text]:
             _, guess = self._prepare_text_prompt(chunk_text)
             effective_frames = (
-                frames_after_eos
-                if frames_after_eos is not None
-                else (self.model_recommended_frames_after_eos or (guess + 2))
+                frames_after_eos if (frames_after_eos is not None) else guess + 2
             )
 
             prepared, _ = self._prepare_text_prompt(text)
