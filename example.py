@@ -10,14 +10,14 @@ tts = PocketTTS(
 )
 
 texts = [
-    "Hi there! How was your day?",
+    "Hello there! How was your day?",
     "Anything I can help you with?",
     "That is awesome, keep it up!"
 ]
 
 print("Generating...")
 for text in texts:
-    generator = tts.stream(text, voice='alba')
+    generator = tts.stream(text, voice='giovanni')
 
     full_audio = np.concat(list(generator), axis=0)
 
