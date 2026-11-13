@@ -4,7 +4,7 @@ import queue
 import time
 import wave
 from pathlib import Path
-from typing import Generator, Optional, Union
+from typing import Generator, Optional, Union, Sequence
 
 import numpy as np
 import onnxruntime as ort
@@ -165,7 +165,7 @@ class PocketTTS:
     def _update_state_from_outputs(
         self,
         state: dict[str, np.ndarray],
-        result: list[np.ndarray],
+        result: Sequence[np.ndarray],
         manifest: list[dict],
         output_offset: int,
     ):
@@ -268,17 +268,6 @@ class PocketTTS:
             state[entry["input_name"]] = self._adapt_state_tensor(tensor, entry)
         return state
 
-    def _condition_with_voice_embeddings(self, embeddings: np.ndarray) -> dict[str, np.ndarray]:
-        voice_embeddings = self._prepare_voice_embeddings(embeddings)
-        state = self._init_state(self.flow_state_manifest)
-        empty_seq = np.zeros((1, 0, self.latent_dim), dtype=np.float32)
-        result = self.flow_lm_main.run(
-            None,
-            {"sequence": empty_seq, "text_embeddings": voice_embeddings, **state},
-        )
-        self._update_state_from_outputs(state, result, self.flow_state_manifest, output_offset=2)
-        return state
-
     def prepare_voice_state(self, voice: str) -> dict[str, np.ndarray]:
 
         if voice in self._voice_state_cache:
@@ -297,7 +286,6 @@ class PocketTTS:
             self._voice_cache[voice] = embeddings
         else:
             raise ValueError(f"Voice '{voice}' not found.")
-        return self._condition_with_voice_embeddings(embeddings)
 
     def _prepare_text_prompt(self, text: str) -> tuple[str, int]:
         text = text.strip()
@@ -539,5 +527,5 @@ class PocketTTS:
 
             if decoded_frames < len(generated_latents):
                 latents_chunk = np.concatenate(generated_latents[decoded_frames:], axis=1)
-                result: np.ndarray = self.mimi_decoder.run(latent=latents_chunk, **mimi_state)[0] # type:ignore
+                result = self.mimi_decoder.run(latent=latents_chunk, **mimi_state)[0] # type:ignore
                 yield result[0].reshape(-1)
