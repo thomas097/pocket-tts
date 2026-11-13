@@ -12,7 +12,9 @@ texts = [
     "Hello there! How was your day?",
     "Anything I can help you with?",
     "That is awesome, keep it up!",
-    "I hope you didn't spend $100?"
+    "I hope you didn't spend $100?",
+    "Dr. Smith bought 5kg of apples for $100.50 at 72°F.",
+    "He did this after visiting https://example.com/shop and emailing support@example.com & saving 50%!"
 ]
 
 with sd.OutputStream(samplerate=24_000, channels=1, dtype='float32') as stream:

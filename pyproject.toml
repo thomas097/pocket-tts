@@ -1,7 +1,7 @@
 [project]
 name = "pocket-tts"
 version = "0.1.0"
-description = "Add your description here"
+description = "PocketTTS by Kyutai ported to the ONNX Runtime"
 readme = "README.md"
 authors = [
     { name = "Thomas Bellucci", email = "th.bellucci@gmail.com" }
@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "grpcio-tools>=1.85.1",
+    "inflect>=7.6.0",
     "matplotlib>=3.11.2",
     "onnxruntime>=1.31.1",
     "pyyaml>=6.0.3",

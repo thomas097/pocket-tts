@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Generator, Optional, Union, Sequence
 
 from .tokenizer import Tokenizer
+from .preprocessing import text_normalize_all
 from .onnx_session import OnnxSession
 
 _NUMPY_DTYPES: dict = {
@@ -183,6 +184,8 @@ class PocketTTS:
         text = text.strip()
         if not text:
             raise ValueError("Text cannot be empty")
+
+        text = text_normalize_all(text)
         
         text = text.replace("\n", " ").replace("\r", " ").replace("  ", " ")
 
