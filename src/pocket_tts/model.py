@@ -1,14 +1,12 @@
 import json
 import time
+import numpy as np
+import safetensors
 from pathlib import Path
 from typing import Generator, Optional, Union, Sequence
 
-import numpy as np
-import safetensors
-
 from .tokenizer import Tokenizer
 from .onnx_session import OnnxSession
-
 
 _NUMPY_DTYPES: dict = {
     "float32": np.float32,
@@ -142,6 +140,7 @@ class PocketTTS:
         slices = tuple(slice(0, min(src, dst)) for src, dst in zip(source.shape, target_shape))
         if all(s.start == s.stop for s in slices):
             return target
+        
         target[slices] = source[slices]
         return target
 
@@ -152,10 +151,13 @@ class PocketTTS:
         for entry in manifest:
             module_state = model_state.get(entry["module"], {})
             tensor = module_state.get(entry["key"])
+            
             if tensor is None and entry["key"] == "step":
                 tensor = self._derive_step(module_state)
+
             if tensor is None:
                 continue
+
             state[entry["input_name"]] = self._adapt_state_tensor(tensor, entry)
         return state
 
@@ -178,6 +180,7 @@ class PocketTTS:
         text = text.strip()
         if not text:
             raise ValueError("Text cannot be empty")
+        
         text = text.replace("\n", " ").replace("\r", " ").replace("  ", " ")
 
         number_of_words = len(text.split())
@@ -185,8 +188,10 @@ class PocketTTS:
 
         if not text[0].isupper():
             text = text[0].upper() + text[1:]
+
         if text[-1].isalnum():
             text = text + "."
+
         return text, frames_after_eos_guess
 
     def _estimate_max_gen_len(self, token_count: int) -> int:
@@ -218,7 +223,6 @@ class PocketTTS:
         curr = np.full((1, 1, self.latent_dim), np.nan, dtype=np.float32)
         eos_step = None
         frame_limit = max_frames or self._estimate_max_gen_len(text_ids.shape[1])
-        dt = 1.0
 
         for step in range(frame_limit):
             result = self.flow_lm_main.run(
@@ -226,12 +230,14 @@ class PocketTTS:
                 text_embeddings=empty_text, 
                 **state
                 )
+            
             conditioning = result[0]
             eos_logit = result[1]
             self._update_state_from_outputs(state, result, self.flow_state_manifest, output_offset=2)
 
             if eos_logit[0][0] > -4.0 and eos_step is None:
                 eos_step = step
+
             if eos_step is not None and step >= eos_step + frames_after_eos:
                 break
 
@@ -241,7 +247,7 @@ class PocketTTS:
                 c=conditioning,  
                 x=x
             )[0]
-            x = x + flow * dt
+            x = x + flow
 
             latent = x.reshape(1, 1, self.latent_dim)
             yield latent

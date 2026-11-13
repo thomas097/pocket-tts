@@ -1,7 +1,4 @@
 {
-  "schema_version": 3,
-  "bundle_name": "english_7m_refl_2026-10",
-  "language": "english_7m_refl_2026-10",
   "sample_rate": 24000,
   "frame_rate": 12.5,
   "samples_per_frame": 1920,
@@ -20,7 +17,6 @@
     "\u2019": "'",
     "\u2018": "'"
   },
-  "has_voice_cloning": true,
   "flow_lm_state_manifest": [
     {
       "index": 0,
