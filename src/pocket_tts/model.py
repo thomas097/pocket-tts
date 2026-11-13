@@ -269,21 +269,13 @@ class PocketTTS:
         return state
 
     def prepare_voice_state(self, voice: str) -> dict[str, np.ndarray]:
-
         if voice in self._voice_state_cache:
             return self._clone_state(self._voice_state_cache[voice])
-
 
         voice_path = self.voices_path / f"{voice}.safetensors"
         if voice_path.exists() and voice_path.suffix == ".safetensors":
             model_state = self._import_model_state_file(voice_path)
             return self._state_from_model_state(model_state, self.flow_state_manifest)
-
-        if voice in self._voice_cache:
-            embeddings = self._voice_cache[voice]
-        elif voice_path.exists():
-            embeddings = self.encode_voice(voice_path)
-            self._voice_cache[voice] = embeddings
         else:
             raise ValueError(f"Voice '{voice}' not found.")
 
@@ -324,17 +316,6 @@ class PocketTTS:
                 previous_was_boundary = False
         indices.append(len(tokens))
         return indices
-
-    def _segments_from_boundaries(
-        self, tokens: list[int], boundary_indices: list[int]
-    ) -> list[tuple[int, str]]:
-        segments = []
-        for i in range(len(boundary_indices) - 1):
-            start = boundary_indices[i]
-            end = boundary_indices[i + 1]
-            text = self.tokenizer.Decode(tokens[start:end])
-            segments.append((end - start, text))
-        return segments
 
     def _estimate_max_gen_len(self, token_count: int) -> int:
         gen_len_sec = token_count / self.TOKENS_PER_SECOND_ESTIMATE + self.GEN_SECONDS_PADDING
