@@ -1,20 +1,21 @@
 import json
-import os
 import time
-import wave
 from pathlib import Path
 from typing import Generator, Optional, Union, Sequence
 
 import numpy as np
 import safetensors
-import onnxruntime as ort
-
-import soundfile as sf
-import scipy.signal
 
 from .tokenizer import Tokenizer
 from .onnx_session import OnnxSession
 
+
+_NUMPY_DTYPES: dict = {
+    "float32": np.float32,
+    "float16": np.float16,
+    "int64": np.int64,
+    "bool": np.bool_,
+}
 
 class PocketTTS:
     VALID_PRECISIONS = ("int8", None)
@@ -81,15 +82,6 @@ class PocketTTS:
             raise FileNotFoundError(f"Missing bundle metadata: {metadata_path}")
         return json.loads(metadata_path.read_text())
 
-    @staticmethod
-    def _numpy_dtype(dtype: str):
-        return {
-            "float32": np.float32,
-            "float16": np.float16,
-            "int64": np.int64,
-            "bool": np.bool_,
-        }[dtype]
-
     def _make_filled_array(self, shape: list[int], dtype, fill: str) -> np.ndarray:
         if fill == "nan":
             return np.full(shape, np.nan, dtype=dtype)
@@ -100,7 +92,7 @@ class PocketTTS:
     def _init_state(self, manifest: list[dict]) -> dict[str, np.ndarray]:
         state = {}
         for entry in manifest:
-            dtype = self._numpy_dtype(entry["dtype"])
+            dtype = _NUMPY_DTYPES.get(entry["dtype"])
             state[entry["input_name"]] = self._make_filled_array(
                 entry["shape"], dtype=dtype, fill=entry["fill"]
             )
@@ -142,7 +134,7 @@ class PocketTTS:
 
     def _adapt_state_tensor(self, source: np.ndarray, entry: dict) -> np.ndarray:
         target_shape = tuple(entry["shape"])
-        target_dtype = self._numpy_dtype(entry["dtype"])
+        target_dtype = _NUMPY_DTYPES.get(entry["dtype"])
         source = np.asarray(source, dtype=target_dtype)
 
         if source.shape == target_shape:
