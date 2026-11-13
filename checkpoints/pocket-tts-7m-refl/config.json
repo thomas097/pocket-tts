@@ -20,8 +20,6 @@
     "\u2019": "'",
     "\u2018": "'"
   },
-  "bos_before_voice_file": "bos_before_voice.npy",
-  "tokenizer_file": "tokenizer.model",
   "has_voice_cloning": true,
   "flow_lm_state_manifest": [
     {

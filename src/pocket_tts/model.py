@@ -35,21 +35,13 @@ class PocketTTS:
         self.voices_path = model_path / voice_dir
         self.precision = precision
 
-        self.sample_rate = int(self._config["sample_rate"])
         self.frame_rate = float(self._config["frame_rate"])
         self.samples_per_frame = int(self._config["samples_per_frame"])
-        self.frame_duration = self.samples_per_frame / self.sample_rate
+        self.frame_duration = self.samples_per_frame / self._config["sample_rate"]
         self.latent_dim = int(self._config["latent_dim"])
         self.conditioning_dim = int(self._config["conditioning_dim"])
         
-        self.max_token_per_chunk = int(self._config.get("max_token_per_chunk", 50))
-
         self.tokenizer = Tokenizer(model_path / "tokenizer.model")
-
-        self.bos_before_voice = None
-        bos_file = self._config.get("bos_before_voice_file")
-        if bos_file:
-            self.bos_before_voice = np.load(model_path / bos_file).astype(np.float32)
 
         self.flow_state_manifest = self._config["flow_lm_state_manifest"]
         self.mimi_state_manifest = self._config["mimi_state_manifest"]
