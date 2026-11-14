@@ -23,12 +23,16 @@ class PocketTTS:
 
     def __init__(
         self,
-        model_path: Path,
+        model_path: Union[str, Path],
         voice_dir: str = "voices",
         precision: str = "int8",
         ) -> None:
         if precision not in self.VALID_PRECISIONS:
             raise ValueError(f"precision must be one of {self.VALID_PRECISIONS}, got '{precision}'")
+
+        if isinstance(model_path, str):
+            model_path = Path(model_path)
+            assert model_path.exists() and model_path.is_dir()
 
         self._config = self._load_metadata_config(model_path)
         self.voices_path = model_path / voice_dir
@@ -247,7 +251,8 @@ class PocketTTS:
             if eos_step is not None and step >= eos_step + frames_after_eos:
                 break
 
-            x = np.zeros((1, self.latent_dim), dtype=np.float32)
+            std = np.sqrt(self._config['default_temperature'])
+            x = np.random.normal(0.0, std, (1, self.latent_dim)).astype(np.float32)
 
             flow = self.flow_lm_flow.run(
                 c=conditioning,  
